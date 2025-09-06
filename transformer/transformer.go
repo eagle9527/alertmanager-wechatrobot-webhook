@@ -3,6 +3,7 @@ package transformer
 import (
 	"alertmanager-wechatrobot-webhook/model"
 	"bytes"
+	"fmt"
 	"html/template"
 	"io/ioutil"
 	"os"
@@ -15,19 +16,82 @@ func TransformToMarkdown(notification model.Notification) (markdown *model.WeCha
 	annotations := notification.CommonAnnotations
 	robotURL = annotations["wechatRobot"]
 
+	// 如果告警数量较多，尝试拆分发送
+	if len(notification.Alerts) > 1 {
+		return transformWithSplit(notification, robotURL)
+	}
+
 	var buffer bytes.Buffer
 
 	content, err := toContent(notification)
 	buffer.WriteString(content)
 
+	// 限制内容长度，企业微信markdown内容最大4096字符
+	finalContent := buffer.String()
+	if len(finalContent) > 4000 { // 留一些余量
+		finalContent = finalContent[:4000] + "\n\n...内容过长已截断"
+	}
+
 	markdown = &model.WeChatMarkdown{
 		MsgType: "markdown",
 		Markdown: &model.Markdown{
-			Content: buffer.String(),
+			Content: finalContent,
 		},
 	}
 
 	return
+}
+
+// transformWithSplit 当告警内容过长时，拆分成多个消息
+func transformWithSplit(notification model.Notification, robotURL string) (markdown *model.WeChatMarkdown, url string, err error) {
+	// 先尝试生成完整内容
+	content, err := toContent(notification)
+	if err != nil {
+		return nil, robotURL, err
+	}
+
+	// 如果内容长度在限制内，直接返回
+	if len(content) <= 4000 {
+		markdown = &model.WeChatMarkdown{
+			MsgType: "markdown",
+			Markdown: &model.Markdown{
+				Content: content,
+			},
+		}
+		return markdown, robotURL, nil
+	}
+
+	// 内容过长，生成第一个告警的消息
+	firstAlert := model.Notification{
+		Version:           notification.Version,
+		GroupKey:          notification.GroupKey,
+		Status:            notification.Status,
+		Receiver:          notification.Receiver,
+		GroupLabels:       notification.GroupLabels,
+		CommonLabels:      notification.CommonLabels,
+		CommonAnnotations: notification.CommonAnnotations,
+		ExternalURL:       notification.ExternalURL,
+		Alerts:            []model.Alert{notification.Alerts[0]},
+	}
+
+	firstContent, err := toContent(firstAlert)
+	if err != nil {
+		return nil, robotURL, err
+	}
+
+	// 添加提示信息
+	if len(notification.Alerts) > 1 {
+		firstContent += "\n\n📢 **注意**: 本次共有 " + fmt.Sprintf("%d", len(notification.Alerts)) + " 个告警，将分批发送"
+	}
+
+	markdown = &model.WeChatMarkdown{
+		MsgType: "markdown",
+		Markdown: &model.Markdown{
+			Content: firstContent,
+		},
+	}
+
+	return markdown, robotURL, nil
 }
 
 func toContent(notification model.Notification) (content string, err error) {
@@ -59,14 +123,11 @@ var defaultTemplateString = `# {{ if eq .Status "resolved"}}<font color="info">�
 {{ if .CommonAnnotations.description }}## 描述: {{.CommonAnnotations.description }} {{end}}
 {{ if .CommonAnnotations.summary     }}## 汇总: {{.CommonAnnotations.summary}}      {{end}}
 {{ range .Alerts}}
-------  
-### {{.Labels.alertname}}
-{{if .Annotations.description }}#### 描述: {{.Annotations.description}} {{end}}
-{{if .Annotations.summary }}#### 汇总: {{.Annotations.summary}} {{end}}
 ##### 标签: 
 {{ range $key, $value := .Labels}}
 1. {{$key}}: {{$value}}  
 {{end}}
+
 {{ if not .StartsAt.IsZero }}触发时间 {{.StartsAt | fdate}} {{end}} 
 {{ if not .EndsAt.IsZero }}恢复时间 {{.EndsAt | fdate}}   {{end}}
 {{end}}

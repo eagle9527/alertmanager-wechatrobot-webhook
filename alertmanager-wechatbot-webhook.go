@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
+	"io/ioutil"
+	"log"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"alertmanager-wechatrobot-webhook/model"
 	"alertmanager-wechatrobot-webhook/notifier"
+	"github.com/gin-gonic/gin"
 )
 
 var (
@@ -32,7 +36,25 @@ func main() {
 	router.POST("/webhook", func(c *gin.Context) {
 		var notification model.Notification
 
-		err := c.BindJSON(&notification)
+		bodyBytes, err := ioutil.ReadAll(c.Request.Body)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		// Pretty print JSON
+		var prettyJSON bytes.Buffer
+		err = json.Indent(&prettyJSON, bodyBytes, "", "    ")
+		if err == nil {
+			log.Println("Raw data received:")
+			log.Println(prettyJSON.String())
+		} else {
+			log.Println("Raw data received (not pretty):")
+			log.Println(string(bodyBytes))
+		}
+
+		err = c.BindJSON(&notification)
 
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -52,7 +74,7 @@ func main() {
 
 	})
 	err := router.Run(":8999")
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 }

@@ -20,10 +20,44 @@ func Send(notification model.Notification, defaultRobot string) (err error) {
 	}
 
 	SendMarkDown(markdown, robotURL, defaultRobot)
+
+	// 如果有多个告警且内容可能被拆分，发送剩余告警
+	if len(notification.Alerts) > 1 {
+		err = sendRemainingAlerts(notification, robotURL, defaultRobot)
+	}
+
 	return
 }
 
-func SendMarkDown(markdown *model.WeChatMarkdown,robotURL string, robot string){
+// sendRemainingAlerts 发送剩余的告警
+func sendRemainingAlerts(notification model.Notification, robotURL string, defaultRobot string) error {
+	// 从第二个告警开始发送
+	for i := 1; i < len(notification.Alerts); i++ {
+		// 创建单个告警的通知
+		singleAlert := model.Notification{
+			Version:           notification.Version,
+			GroupKey:          notification.GroupKey,
+			Status:            notification.Status,
+			Receiver:          notification.Receiver,
+			GroupLabels:       notification.GroupLabels,
+			CommonLabels:      notification.CommonLabels,
+			CommonAnnotations: notification.CommonAnnotations,
+			ExternalURL:       notification.ExternalURL,
+			Alerts:            []model.Alert{notification.Alerts[i]},
+		}
+
+		markdown, _, err := transformer.TransformToMarkdown(singleAlert)
+		if err != nil {
+			log.Printf("Error transforming alert %d: %v", i+1, err)
+			continue
+		}
+
+		SendMarkDown(markdown, robotURL, defaultRobot)
+	}
+	return nil
+}
+
+func SendMarkDown(markdown *model.WeChatMarkdown, robotURL string, robot string) {
 	data, err := json.Marshal(markdown)
 
 	println(data)
@@ -32,9 +66,9 @@ func SendMarkDown(markdown *model.WeChatMarkdown,robotURL string, robot string){
 	}
 
 	var wechatRobotURL string
-	if robotURL != ""{
+	if robotURL != "" {
 		wechatRobotURL = robotURL
-	}else{
+	} else {
 		wechatRobotURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + robot
 	}
 
